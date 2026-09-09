@@ -1,0 +1,23 @@
+# 敏感信息 —— 绝不提交
+.env
+
+# 运行产物
+reports/
+*.log
+
+# .workbuddy 只保留去重状态 papers_seen.json（云端靠它延续去重，
+# 已确认不含邮箱/密钥）；memory/ 等含个人邮箱地址，不入库
+.workbuddy/*
+!.workbuddy/papers_seen.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 本地构建的静态站点（用 build_site.py 重新生成）
+web/
+
+# 系统文件
+.DS_Store
+Thumbs.db

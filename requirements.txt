@@ -1,0 +1,10 @@
+# 热点追踪助手 · 依赖说明
+#
+# 本项目刻意做到零第三方依赖（仅 Python 标准库）：
+#   HTTP   -> urllib.request    （arXiv API、LLM API）
+#   XML    -> xml.etree          （arXiv Atom 解析）
+#   邮件   -> smtplib + email    （SMTP 发送）
+#   配置   -> os.environ         （环境变量 + 极简 .env 解析）
+#
+# 因此本地与 CI 都无需 pip install。
+# 此文件保留为空声明，供未来引入依赖时使用。
