@@ -1,6 +1,6 @@
 {
   "_comment": "已推送论文的 arXiv ID 清单。每周任务先读此文件，只推送不在列表中的新论文；发送成功后追加。",
-  "_updated": "2026-09-04",
+  "_updated": "2026-09-09",
   "seen": [
     {
       "arxiv_id": "2605.15195",
@@ -41,6 +41,59 @@
       "arxiv_id": "2507.23277",
       "title": "iLRM: An Iterative Large 3D Reconstruction Model",
       "pushed_at": "2026-09-04"
+    },
+    {
+      "arxiv_id": "2609.08841",
+      "title": "Leveraging Visual and Geometric Priors for Metric-scale and Complete Vehicle Gaussian Reconstruction from Limited Views",
+      "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2609.08730",
+      "title": "CVT-GS: Learning to Simplify 3D Gaussian Splatting with Centroidal Voronoi Tessellation",
+      "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2609.07734",
+      "title": "TV-SGS: Gaussian Splatting with Geometric Information Propagation via Tensor Voting under sparse views",
+      "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2609.07557",
+      "title": "Heat Kernel Textures: the Geodesic Gaussians That Do Not Splat",
+      "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2609.07274",
+      "title": "LightSplat: Real-Time High-Fidelity 3D Gaussian SLAM with Loop Closure",
+      "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2609.06099",
+      "title": "PASTEL: Panoramic Alignment for Monocular 4D Scene Reconstruction",
+      "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2609.05210",
+      "title": "BLASt3R: Bundle Adjustment of Any Image Set with Multi-View Matching and Monocular Priors",
+      "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2609.04201",
+      "title": "Scal3R: Learning Efficient Multi-Relative Pose Query for Scalable Online 3D Reconstruction",
+      "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2609.02847",
+      "title": "RoGe: Novel View Synthesis via End-to-End Implicit Reconstruction and Generation",
+      "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2608.29106",
+      "title": "Elastic Triangle Splatting",
+      "pushed_at": "2026-09-09"
     }
+  ],
+  "_runs": [
+    "2026-W37"
   ]
 }
