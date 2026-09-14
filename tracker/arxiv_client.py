@@ -4,7 +4,8 @@
 不做任何"补全""推测"，也没有 LLM 参与。标题和链接一旦失真，
 后面所有环节的真实性都无从谈起，所以这层必须是纯代码。
 
-网络健壮性：arXiv 偶发 5xx / 超时，采用指数退避重试；
+网络健壮性：arXiv 偶发 5xx / 超时 / 429 限流，采用指数退避重试
+（429 是数据中心 IP 常态，退避更长并尊重 Retry-After 头）；
 同时遵守官方建议 —— 单次请求后留出间隔，不做并发轰炸。
 """
 
@@ -149,13 +150,25 @@ def _request(url: str, timeout: int, attempts: int) -> str:
                 return resp.read().decode("utf-8", errors="replace")
         except Exception as exc:  # noqa: BLE001 - 网络异常类型繁杂，统一退避重试
             last = exc
+            wait: int | None = None
             if isinstance(exc, urllib.error.HTTPError):
                 # 429(限流)与5xx属于「稍后重试有效」；其余4xx(404/403等)
                 # 是请求本身的问题，重试无意义，直接放弃
                 if exc.code != 429 and exc.code < 500:
                     raise ArxivError(f"arXiv 返回 HTTP {exc.code}") from exc
+                if exc.code == 429 and exc.headers:
+                    # 限流响应可能带 Retry-After，优先尊重官方指示
+                    ra = exc.headers.get("Retry-After")
+                    if ra and ra.strip().isdigit():
+                        wait = min(int(ra.strip()), 120)
             if i < attempts - 1:
-                wait = min(2 ** i * 2, 30)
+                if wait is None:
+                    # 429 多发生在数据中心 IP 段（GitHub Actions runner 常见），
+                    # 通常需要数十秒级退避才放行；5xx/网络抖动短退避即可
+                    base = 10 if (
+                        isinstance(exc, urllib.error.HTTPError) and exc.code == 429
+                    ) else 2
+                    wait = min(base * (2 ** i), 120)
                 time.sleep(wait)
     raise ArxivError(f"arXiv 请求失败（重试 {attempts} 次）：{last}")
 
@@ -175,7 +188,7 @@ def fetch_recent(
     max_results: int = 60,
     lookback_days: int = 30,
     timeout: int = 45,
-    attempts: int = 3,
+    attempts: int = 6,
 ) -> list[dict]:
     """按检索式拉取近期论文，返回按提交时间倒序的候选列表。
 
