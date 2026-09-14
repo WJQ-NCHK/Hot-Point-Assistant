@@ -15,7 +15,9 @@ name: weekly-papers
 
 on:
   schedule:
-    - cron: "0 6 * * 1"   # 每周一 06:00 UTC = 14:00 北京时间
+    # 刻意避开整点：GitHub 整点任务量最大、排队最久（官方实践建议错峰）。
+    # 06:23 UTC = 北京时间 周一 14:23
+    - cron: "23 6 * * 1"
   workflow_dispatch:        # 手动触发，用于部署后的验证
     inputs:
       force:
