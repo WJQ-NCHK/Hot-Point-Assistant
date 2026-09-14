@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import socket
 import time
@@ -20,9 +21,21 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 
+log = logging.getLogger("tracker.arxiv")
+
 API_URL = "https://export.arxiv.org/api/query"
 ATOM = "{http://www.w3.org/2005/Atom}"
 ARXIV = "{http://arxiv.org/schemas/atom}"
+
+# 公共转发代理（字节透传、免注册）。背景：GitHub Actions 等数据中心 IP
+# 会被 arXiv 整段限流（HTTP 429），且一限常是小时级 —— 2026-09-14 实测
+# 直连退避 5 分钟仍全程 429。直连失败后依次切换这些代理换出口 IP。
+# 返回内容会经 _looks_like_atom 校验 + 上层 XML 解析双重把关，
+# 代理返回错误页/垃圾内容时会被当作失败换下一通道，不会污染数据。
+_PROXY_BUILDERS = (
+    ("allorigins", lambda u: "https://api.allorigins.win/raw?url=" + urllib.parse.quote(u, safe="")),
+    ("codetabs", lambda u: "https://api.codetabs.com/v1/proxy?quest=" + urllib.parse.quote(u, safe="")),
+)
 
 # 官方 GitHub 代码仓库地址
 CODE_URL_RE = re.compile(
@@ -139,38 +152,65 @@ def _parse_entry(entry: ET.Element) -> dict | None:
     }
 
 
+def _looks_like_atom(data: str) -> bool:
+    """粗校验：arXiv API 的 Atom 响应以 <feed 开头（空结果集也如此）。
+    代理通道可能 200 返回错误页，这里把住第一道关。"""
+    return "<feed" in data[:2000]
+
+
 def _request(url: str, timeout: int, attempts: int) -> str:
+    # 通道顺序：直连 → 公共代理。直连配满额重试（含 429 长退避），
+    # 代理通道各给 3 次短重试；任一通道成功即返回。
+    channels: list[tuple[str, str, int]] = [("direct", url, attempts)]
+    channels += [(name, build(url), 3) for name, build in _PROXY_BUILDERS]
+
     last: Exception | None = None
-    for i in range(attempts):
-        try:
-            req = urllib.request.Request(
-                url, headers={"User-Agent": DEFAULT_UA}
-            )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read().decode("utf-8", errors="replace")
-        except Exception as exc:  # noqa: BLE001 - 网络异常类型繁杂，统一退避重试
-            last = exc
-            wait: int | None = None
-            if isinstance(exc, urllib.error.HTTPError):
-                # 429(限流)与5xx属于「稍后重试有效」；其余4xx(404/403等)
-                # 是请求本身的问题，重试无意义，直接放弃
-                if exc.code != 429 and exc.code < 500:
-                    raise ArxivError(f"arXiv 返回 HTTP {exc.code}") from exc
-                if exc.code == 429 and exc.headers:
-                    # 限流响应可能带 Retry-After，优先尊重官方指示
-                    ra = exc.headers.get("Retry-After")
-                    if ra and ra.strip().isdigit():
-                        wait = min(int(ra.strip()), 120)
-            if i < attempts - 1:
+    for name, target, tries in channels:
+        for i in range(tries):
+            try:
+                req = urllib.request.Request(
+                    target, headers={"User-Agent": DEFAULT_UA}
+                )
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    data = resp.read().decode("utf-8", errors="replace")
+                if not _looks_like_atom(data):
+                    raise ValueError(
+                        f"通道 {name} 返回内容不是 Atom XML（前 80 字符：{data[:80]!r}）"
+                    )
+                if name != "direct":
+                    log.info("arXiv 请求经由 %s 代理通道成功", name)
+                return data
+            except Exception as exc:  # noqa: BLE001 - 网络/代理异常繁杂，统一处理
+                last = exc
+                fatal = False
+                wait: int | None = None
+                if isinstance(exc, urllib.error.HTTPError):
+                    if exc.code == 429:
+                        # 限流响应可能带 Retry-After，优先尊重官方指示
+                        if exc.headers:
+                            ra = exc.headers.get("Retry-After")
+                            if ra and ra.strip().isdigit():
+                                wait = min(int(ra.strip()), 120)
+                        if wait is None and name == "direct":
+                            # 直连 429 多为数据中心 IP 段被整段限流，
+                            # 需要数十秒级长退避；代理通道短退避即可
+                            wait = min(10 * (2 ** i), 120)
+                    elif exc.code < 500:
+                        # 直连遇 403/404 等：请求本身有问题，换代理无意义
+                        if name == "direct":
+                            raise ArxivError(f"arXiv 返回 HTTP {exc.code}") from exc
+                        # 代理自身 4xx：本通道作废，换下一个
+                        fatal = True
+                if fatal or i >= tries - 1:
+                    if name == "direct" and tries > 1:
+                        log.warning("直连 arXiv 失败（%s），切换代理通道", exc)
+                    break
                 if wait is None:
-                    # 429 多发生在数据中心 IP 段（GitHub Actions runner 常见），
-                    # 通常需要数十秒级退避才放行；5xx/网络抖动短退避即可
-                    base = 10 if (
-                        isinstance(exc, urllib.error.HTTPError) and exc.code == 429
-                    ) else 2
-                    wait = min(base * (2 ** i), 120)
+                    wait = min(2 * (2 ** i), 30)
                 time.sleep(wait)
-    raise ArxivError(f"arXiv 请求失败（重试 {attempts} 次）：{last}")
+    raise ArxivError(
+        f"arXiv 请求失败（直连与 {len(_PROXY_BUILDERS)} 个代理通道均失败）：{last}"
+    )
 
 
 def _parse_published(value: str) -> datetime | None:

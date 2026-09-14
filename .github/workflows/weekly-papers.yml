@@ -10,6 +10,12 @@
 #
 # 幂等保障：脚本内部按 ISO 周键拦截（见 tracker/state.py），
 #   workflow 重试/手动重复触发也不会重复发信。
+#
+# 容错设计（2026-09-14 实测教训）：
+#   1. arXiv 会发生小时级大面积限流（HTTP 429 "Rate exceeded."，
+#      连家宽 IP 都被拒，与本仓库无关）→ 抓取层带直连+公共代理双通道
+#      （tracker/arxiv_client.py），本层再做 3 次间隔 20 分钟的分批重试；
+#   2. 失败的 run 不写状态 → 同周稍后再次触发会自动补发（幂等保护）。
 
 name: weekly-papers
 
@@ -39,7 +45,8 @@ permissions:
 jobs:
   send:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 3 次尝试 + 2 次间隔 20 分钟 ≈ 最坏 70 分钟
+    timeout-minutes: 75
 
     steps:
       - name: 检出代码
@@ -52,7 +59,7 @@ jobs:
 
       # 零第三方依赖，无需 pip install —— 见 requirements.txt 说明
 
-      - name: 运行周报流水线
+      - name: 运行周报流水线（含分批重试）
         env:
           # ---- 敏感信息全部来自仓库 Secrets，不进代码不进日志 ----
           SMTP_USER: ${{ secrets.SMTP_USER }}
@@ -67,10 +74,24 @@ jobs:
           MAX_PICKS: "10"
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '1' || '0' }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+        # 分批重试：arXiv 限流/过载通常分钟-小时级自愈，隔 20 分钟再试
+        # 比在同一时刻加码重试有效得多。失败不写状态，同周重跑即补发。
         run: |
           set -o pipefail
-          python run.py -v 2>&1 | tee run.log
-          exit ${PIPESTATUS[0]}
+          status=1
+          for i in 1 2 3; do
+            echo "=== 第 $i/3 次尝试 ==="
+            if python run.py -v 2>&1 | tee run.log; then
+              status=0
+              break
+            fi
+            echo "::warning::第 $i/3 次尝试失败"
+            if [ "$i" -lt 3 ]; then
+              echo "等待 20 分钟后重试（arXiv 限流通常分钟-小时级自愈）"
+              sleep 1200
+            fi
+          done
+          exit $status
 
       # 报告与状态无论如何都上传为 artifact：发送失败时成果不丢，
       # 且能从 Actions 页面直接看到本周生成的 HTML 报告
