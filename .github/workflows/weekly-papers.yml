@@ -45,6 +45,10 @@ on:
         description: "只诊断 arXiv 连通性（逐组合打印状态），不发信"
         type: boolean
         default: false
+      ci_probe:
+        description: "临时：额外候选通道 URL（名称=URL;名称=URL）"
+        type: string
+        default: ""
 
 # 同一时间只允许一个实例，防止定时与手动触发并发导致的状态竞争
 concurrency:
@@ -86,6 +90,7 @@ jobs:
           MIN_PICKS: "5"
           MAX_PICKS: "10"
           PROBE_ARXIV: ${{ github.event_name == 'workflow_dispatch' && inputs.arxiv_probe && '1' || '0' }}
+          ARXIV_EXTRA_URLS: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_probe || '' }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '1' || '0' }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
         # 分批重试：arXiv 限流/拒绝通常分钟-小时级自愈，隔 20 分钟再试
@@ -98,8 +103,14 @@ jobs:
           set -o pipefail
           if [ "$PROBE_ARXIV" = "1" ]; then
             echo "::notice::只做 arXiv 连通性诊断，不发送邮件"
-            python run.py --probe-arxiv -v 2>&1 | tee run.log
-            status=${PIPESTATUS[0]}
+            if [ -n "$ARXIV_EXTRA_URLS" ]; then
+              echo "::notice::额外候选通道：$ARXIV_EXTRA_URLS"
+              python .tmp_ci_probe.py 2>&1 | tee run.log
+              status=${PIPESTATUS[0]}
+            else
+              python run.py --probe-arxiv -v 2>&1 | tee run.log
+              status=${PIPESTATUS[0]}
+            fi
             echo "exit_code=$status" >> "$GITHUB_OUTPUT"
             exit "$status"
           fi
