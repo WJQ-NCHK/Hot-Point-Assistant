@@ -1,6 +1,6 @@
 {
   "_comment": "已推送论文的 arXiv ID 清单。每周任务先读此文件，只推送不在列表中的新论文；发送成功后追加。",
-  "_updated": "2026-09-09",
+  "_updated": "2026-09-22",
   "seen": [
     {
       "arxiv_id": "2605.15195",
@@ -91,9 +91,50 @@
       "arxiv_id": "2608.29106",
       "title": "Elastic Triangle Splatting",
       "pushed_at": "2026-09-09"
+    },
+    {
+      "arxiv_id": "2609.20012",
+      "title": "GRF-Recon: Global Ray-Field Optimization for Long-Sequence Feed-forward Reconstruction",
+      "pushed_at": "2026-09-22"
+    },
+    {
+      "arxiv_id": "2609.23286",
+      "title": "RegVGGT: Sustainable Visual Geometry Grounding for Streaming via Regulated Memory",
+      "pushed_at": "2026-09-22"
+    },
+    {
+      "arxiv_id": "2609.21347",
+      "title": "Cube-Splat: High-Fidelity 360° Gaussian Splatting SLAM via Cubemap Factorization and Adjoint-Consistent Optimization",
+      "pushed_at": "2026-09-22"
+    },
+    {
+      "arxiv_id": "2609.23182",
+      "title": "GrapeSplat: Geometry-Grounded Reconstruction via Amalgamated Pose-Free Encoding for Feed-Forward 3D Gaussian Splatting",
+      "pushed_at": "2026-09-22"
+    },
+    {
+      "arxiv_id": "2609.15795",
+      "title": "SURE-Map: Self-Correcting Streaming Geometric Foundation Models",
+      "pushed_at": "2026-09-22"
+    },
+    {
+      "arxiv_id": "2609.21498",
+      "title": "VoxelTTO: Voxel-Aligned Feed-Forward 3D Gaussian Splatting with Test-Time Optimization",
+      "pushed_at": "2026-09-22"
+    },
+    {
+      "arxiv_id": "2609.18034",
+      "title": "IRIS: Implicit Rendering Matters for Pose-Free Novel View Synthesis",
+      "pushed_at": "2026-09-22"
+    },
+    {
+      "arxiv_id": "2609.15018",
+      "title": "G-ray: Ray-Level Relative Geometric Position Encoding in Multi-View Vision Transformers under Camera Heterogeneity",
+      "pushed_at": "2026-09-22"
     }
   ],
   "_runs": [
-    "2026-W37"
+    "2026-W37",
+    "2026-W39"
   ]
 }
