@@ -18,6 +18,7 @@ Atom XML 就立即返回，限流/拒绝因此可以自愈。
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import socket
@@ -34,15 +35,25 @@ API_URL = "https://export.arxiv.org/api/query"
 ATOM = "{http://www.w3.org/2005/Atom}"
 ARXIV = "{http://arxiv.org/schemas/atom}"
 
-# 公共转发代理（字节透传、免注册）。背景：GitHub Actions 等数据中心 IP
-# 会被 arXiv 整段限流（HTTP 429），且一限常是小时级 —— 2026-09-14 实测
-# 直连退避 5 分钟仍全程 429。直连失败后依次切换这些代理换出口 IP。
+# 公共转发代理（字节透传、免注册）。2026-09-22 在 GitHub Actions runner 上
+# 逐个实测（见提交信息）：从数据中心 IP 直连 arXiv 会间歇性返回
+# HTTP 406 Not Acceptable（同一请求同样 UA，有时 200 有时 406），
+# 而 allorigins 的 /raw 通道在 CI 上稳定拿到完整 Atom feed（实测 200 + 10 篇）。
+# 因此把代理作为与直连并列的「通道」，任一成功即返回。
 # 返回内容会经 _looks_like_atom 校验 + 上层 XML 解析双重把关，
-# 代理返回错误页/垃圾内容时会被当作失败换下一通道，不会污染数据。
-_PROXY_BUILDERS = (
-    ("allorigins", lambda u: "https://api.allorigins.win/raw?url=" + urllib.parse.quote(u, safe="")),
-    ("codetabs", lambda u: "https://api.codetabs.com/v1/proxy?quest=" + urllib.parse.quote(u, safe="")),
+# 代理返回错误页/垃圾内容时会被当作失败换下一组合，不会污染数据。
+# 模板占位符：{enc} = URL 编码后的目标地址，{url} = 原始地址。
+_PROXY_TEMPLATES: tuple[tuple[str, str], ...] = (
+    ("allorigins", "https://api.allorigins.win/raw?url={enc}"),
+    ("codetabs", "https://api.codetabs.com/v1/proxy?quest={enc}"),
 )
+
+
+def _build_proxy_url(template: str, target: str) -> str:
+    return template.format(
+        enc=urllib.parse.quote(target, safe=""),
+        url=target,
+    )
 
 # 官方 GitHub 代码仓库地址
 CODE_URL_RE = re.compile(
@@ -198,12 +209,12 @@ def _looks_like_atom(data: str) -> bool:
 
 
 def _backoff(i: int, name: str, retry_after: str | None) -> int:
-    """退避秒数：尊重 Retry-After；直连长退避（数据中心 IP 限流是小时级），
-    代理通道短退避（代理自身几乎不限流，快速换组合更有效）。"""
+    """退避秒数：尊重 Retry-After；直连中等退避（数据中心 IP 的 406/429 常为
+    间歇性），代理通道短退避（代理自身几乎不限流，快速换组合更有效）。"""
     if retry_after and retry_after.strip().isdigit():
         return min(int(retry_after.strip()), 120)
-    base = 12 if name == "direct" else 5
-    ceiling = 120 if name == "direct" else 30
+    base = 8 if name == "direct" else 4
+    ceiling = 60 if name == "direct" else 20
     return min(base * (2 ** i), ceiling)
 
 
@@ -217,14 +228,43 @@ def _describe(exc: Exception) -> str:
     return f"{type(exc).__name__}({exc})"
 
 
+def _unwrap(payload: str) -> str:
+    """代理可能把内容包在 JSON 里（如 allorigins /get 的 {"contents": ...}）。
+    原样透传的代理不需要这层，做一次宽容尝试即可。"""
+    if _looks_like_atom(payload):
+        return payload
+    head = payload.lstrip()[:1]
+    if head not in ("{", "["):
+        return payload
+    try:
+        obj = json.loads(payload)
+    except json.JSONDecodeError:
+        return payload
+    if isinstance(obj, dict):
+        for key in ("contents", "content", "body", "data", "result"):
+            value = obj.get(key)
+            if isinstance(value, str) and _looks_like_atom(value):
+                return value
+    return payload
+
+
 def _probe(target: str, headers: dict[str, str], timeout: int) -> str:
     """用指定请求特征抓一次，返回响应正文。网络/HTTP 异常原样抛出。"""
     req = urllib.request.Request(target, headers=dict(headers))
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = resp.read().decode("utf-8", errors="replace")
+    data = _unwrap(data)
     if not _looks_like_atom(data):
         raise ValueError("返回内容不是 Atom XML（前 80 字符：%r）" % data[:80])
     return data
+
+
+def _channel_targets(url: str) -> list[tuple[str, str]]:
+    """通道列表：直连优先（本机家宽直连又快又稳），代理兜底（CI 上唯一稳的）。"""
+    targets: list[tuple[str, str]] = [("direct", url)]
+    for name, template in _PROXY_TEMPLATES:
+        targets.append((name, _build_proxy_url(template, url)))
+    return targets
 
 
 def _request(url: str, timeout: int, rounds: int) -> str:
@@ -233,25 +273,28 @@ def _request(url: str, timeout: int, rounds: int) -> str:
     组合顺序（外层=通道，内层=特征）：
         直连 minimal → 直连 atom → 直连 browser
         → allorigins × 3 特征 → codetabs × 3 特征
-    直连的 minimal 特征允许重试一次（覆盖瞬时抖动），其余组合各试一次；
-    恢复主要靠「换特征 / 换出口 IP」，而不是拿同一特征硬撞 ——
+    每轮结束会重新走一遍尚未用尽次数的组合；因为 2026-09-22 实测
+    CI 上直连 arXiv 的 406 是「间歇性」的（同一请求有时 200 有时 406），
+    所以「同一组合多试几轮」和「换组合」同样重要：
+        直连 minimal 总共 3 次（覆盖间歇性 406/429，成对退避 8s/16s），
+        直连其余特征、以及每个代理特征各 2 次（代理偶发 5xx 需要重试）。
     这正好覆盖 HTTP 429「Rate exceeded.」与 HTTP 406「Not Acceptable」。
     """
     combos: list[tuple[str, str, dict[str, str], str]] = []
-    for name, build in (("direct", None), *_PROXY_BUILDERS):
-        target = url if build is None else build(url)
+    for name, target in _channel_targets(url):
         for pname, headers in _REQUEST_PROFILES:
             combos.append((name, pname, headers, target))
 
     rounds = max(1, rounds)
     used: dict[tuple[str, str], int] = {}
     last_desc = "未发起任何请求"
+    log.info("arXiv 取数：%d 个「通道×请求特征」组合 × 最多 %d 轮",
+             len(combos), rounds)
 
     for rnd in range(rounds):
         for name, pname, headers, target in combos:
             key = (name, pname)
-            allowed = 2 if (name == "direct" and pname == "minimal") else 1
-            if used.get(key, 0) >= allowed:
+            if used.get(key, 0) >= 2:
                 continue
             used[key] = used.get(key, 0) + 1
             label = f"{name}/{pname}"
@@ -263,7 +306,7 @@ def _request(url: str, timeout: int, rounds: int) -> str:
                 if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
                     ra = exc.headers.get("Retry-After") if exc.headers else None
                     wait = _backoff(rnd, name, ra)
-                    log.warning("arXiv 限流（%s，HTTP 429），%d 秒后换组合重试",
+                    log.warning("arXiv 限流（%s，HTTP 429），%d 秒后再试",
                                 label, wait)
                     time.sleep(wait)
                 continue
@@ -287,8 +330,7 @@ def probe_profiles(url: str | None = None, timeout: int = 20) -> list[tuple[str,
     """
     target = url or (API_URL + "?search_query=cat:cs.CV&max_results=1")
     rows: list[tuple[str, str, str]] = []
-    for name, build in (("direct", None), *_PROXY_BUILDERS):
-        probe_url = target if build is None else build(target)
+    for name, probe_url in _channel_targets(target):
         for pname, headers in _REQUEST_PROFILES:
             label = f"{name}/{pname}"
             try:
