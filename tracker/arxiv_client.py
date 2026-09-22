@@ -4,9 +4,16 @@
 不做任何"补全""推测"，也没有 LLM 参与。标题和链接一旦失真，
 后面所有环节的真实性都无从谈起，所以这层必须是纯代码。
 
-网络健壮性：arXiv 偶发 5xx / 超时 / 429 限流，采用指数退避重试
-（429 是数据中心 IP 常态，退避更长并尊重 Retry-After 头）；
-同时遵守官方建议 —— 单次请求后留出间隔，不做并发轰炸。
+网络健壮性（2026-09-21 实测教训）：arXiv 会按「请求特征」拒绝访问，
+而不只是按 IP —— 既有 HTTP 429 "Rate exceeded."（限流），也有
+HTTP 406 "Not Acceptable"（直接拒绝该请求特征/客户端标识）。
+旧实现在直连遇到 4xx 时立即抛错，代理通道根本没机会生效；而 406/429
+恰恰属于「换一个请求特征或换一个出口 IP 就能恢复」的场景。
+
+现在的策略是「请求特征阶梯（profile ladder）× 通道（直连/公共代理）」
+组合矩阵：先换最不容易被拒的特征，再换出口 IP，任一组合拿到合法
+Atom XML 就立即返回，限流/拒绝因此可以自愈。
+同时遵守官方建议 —— 请求之间保持间隔，不做并发轰炸（每周仅 4 次运行）。
 """
 
 from __future__ import annotations
@@ -52,7 +59,39 @@ _TAIL_PUNCT = ".,;:)]}、。，）】》"
 _PROJECT_CTX = ("project page", "project website", "code is available", "code:",
                 "code available", "website", "homepage", "源代码", "项目主页", "项目页")
 
-DEFAULT_UA = "hotspot-tracker/1.0 (research digest script)"
+# 请求特征阶梯：按「最可能被接受」的顺序尝试。
+#   minimal  —— 与旧版线上形态一致（Accept: */*），保持兼容、优先使用；
+#   atom     —— 显式声明只接受 Atom（arXiv 官方接口本该返回 Atom）；
+#   browser  —— 浏览器形态 UA + Accept，对方 CDN/WAF 的指纹规则最宽容。
+# 刻意不再使用含 "tracker" 字样的 UA —— 这类标识最容易被内容风控直接拒
+# （这正是 2026-09-21 那次 HTTP 406 的核心嫌疑特征）。
+_HOMEPAGE = "https://github.com/WJQ-NCHK/Hot-Point-Assistant"
+_REQUEST_PROFILES: tuple[tuple[str, dict[str, str]], ...] = (
+    (
+        "minimal",
+        {"User-Agent": f"HotPointAssistant/1.0 (+{_HOMEPAGE})", "Accept": "*/*"},
+    ),
+    (
+        "atom",
+        {
+            "User-Agent": f"HotPointAssistant/1.0 (+{_HOMEPAGE})",
+            "Accept": "application/atom+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    ),
+    (
+        "browser",
+        {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    ),
+)
+
+DEFAULT_UA = _REQUEST_PROFILES[0][1]["User-Agent"]
 
 
 def _clean_url(url: str) -> str:
@@ -158,59 +197,111 @@ def _looks_like_atom(data: str) -> bool:
     return "<feed" in data[:2000]
 
 
-def _request(url: str, timeout: int, attempts: int) -> str:
-    # 通道顺序：直连 → 公共代理。直连配满额重试（含 429 长退避），
-    # 代理通道各给 3 次短重试；任一通道成功即返回。
-    channels: list[tuple[str, str, int]] = [("direct", url, attempts)]
-    channels += [(name, build(url), 3) for name, build in _PROXY_BUILDERS]
+def _backoff(i: int, name: str, retry_after: str | None) -> int:
+    """退避秒数：尊重 Retry-After；直连长退避（数据中心 IP 限流是小时级），
+    代理通道短退避（代理自身几乎不限流，快速换组合更有效）。"""
+    if retry_after and retry_after.strip().isdigit():
+        return min(int(retry_after.strip()), 120)
+    base = 12 if name == "direct" else 5
+    ceiling = 120 if name == "direct" else 30
+    return min(base * (2 ** i), ceiling)
 
-    last: Exception | None = None
-    for name, target, tries in channels:
-        for i in range(tries):
+
+def _describe(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, urllib.error.URLError):
+        return f"URLError({exc.reason})"
+    if isinstance(exc, (socket.timeout, TimeoutError)):
+        return "超时"
+    return f"{type(exc).__name__}({exc})"
+
+
+def _probe(target: str, headers: dict[str, str], timeout: int) -> str:
+    """用指定请求特征抓一次，返回响应正文。网络/HTTP 异常原样抛出。"""
+    req = urllib.request.Request(target, headers=dict(headers))
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read().decode("utf-8", errors="replace")
+    if not _looks_like_atom(data):
+        raise ValueError("返回内容不是 Atom XML（前 80 字符：%r）" % data[:80])
+    return data
+
+
+def _request(url: str, timeout: int, rounds: int) -> str:
+    """按「通道 × 请求特征」组合矩阵取数，任一组合成功即返回。
+
+    组合顺序（外层=通道，内层=特征）：
+        直连 minimal → 直连 atom → 直连 browser
+        → allorigins × 3 特征 → codetabs × 3 特征
+    直连的 minimal 特征允许重试一次（覆盖瞬时抖动），其余组合各试一次；
+    恢复主要靠「换特征 / 换出口 IP」，而不是拿同一特征硬撞 ——
+    这正好覆盖 HTTP 429「Rate exceeded.」与 HTTP 406「Not Acceptable」。
+    """
+    combos: list[tuple[str, str, dict[str, str], str]] = []
+    for name, build in (("direct", None), *_PROXY_BUILDERS):
+        target = url if build is None else build(url)
+        for pname, headers in _REQUEST_PROFILES:
+            combos.append((name, pname, headers, target))
+
+    rounds = max(1, rounds)
+    used: dict[tuple[str, str], int] = {}
+    last_desc = "未发起任何请求"
+
+    for rnd in range(rounds):
+        for name, pname, headers, target in combos:
+            key = (name, pname)
+            allowed = 2 if (name == "direct" and pname == "minimal") else 1
+            if used.get(key, 0) >= allowed:
+                continue
+            used[key] = used.get(key, 0) + 1
+            label = f"{name}/{pname}"
             try:
-                req = urllib.request.Request(
-                    target, headers={"User-Agent": DEFAULT_UA}
-                )
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    data = resp.read().decode("utf-8", errors="replace")
-                if not _looks_like_atom(data):
-                    raise ValueError(
-                        f"通道 {name} 返回内容不是 Atom XML（前 80 字符：{data[:80]!r}）"
-                    )
-                if name != "direct":
-                    log.info("arXiv 请求经由 %s 代理通道成功", name)
-                return data
+                data = _probe(target, headers, timeout)
             except Exception as exc:  # noqa: BLE001 - 网络/代理异常繁杂，统一处理
-                last = exc
-                fatal = False
-                wait: int | None = None
-                if isinstance(exc, urllib.error.HTTPError):
-                    if exc.code == 429:
-                        # 限流响应可能带 Retry-After，优先尊重官方指示
-                        if exc.headers:
-                            ra = exc.headers.get("Retry-After")
-                            if ra and ra.strip().isdigit():
-                                wait = min(int(ra.strip()), 120)
-                        if wait is None and name == "direct":
-                            # 直连 429 多为数据中心 IP 段被整段限流，
-                            # 需要数十秒级长退避；代理通道短退避即可
-                            wait = min(10 * (2 ** i), 120)
-                    elif exc.code < 500:
-                        # 直连遇 403/404 等：请求本身有问题，换代理无意义
-                        if name == "direct":
-                            raise ArxivError(f"arXiv 返回 HTTP {exc.code}") from exc
-                        # 代理自身 4xx：本通道作废，换下一个
-                        fatal = True
-                if fatal or i >= tries - 1:
-                    if name == "direct" and tries > 1:
-                        log.warning("直连 arXiv 失败（%s），切换代理通道", exc)
-                    break
-                if wait is None:
-                    wait = min(2 * (2 ** i), 30)
-                time.sleep(wait)
+                last_desc = f"{label} → {_describe(exc)}"
+                log.debug("arXiv 组合 %s 失败：%s", label, _describe(exc))
+                if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+                    ra = exc.headers.get("Retry-After") if exc.headers else None
+                    wait = _backoff(rnd, name, ra)
+                    log.warning("arXiv 限流（%s，HTTP 429），%d 秒后换组合重试",
+                                label, wait)
+                    time.sleep(wait)
+                continue
+            if label != "direct/minimal":
+                log.info("arXiv 请求经组合 %s 成功", label)
+            return data
+
     raise ArxivError(
-        f"arXiv 请求失败（直连与 {len(_PROXY_BUILDERS)} 个代理通道均失败）：{last}"
+        "arXiv 请求失败（尝试了 %d 个「通道×请求特征」组合、%d 轮）：最后失败 %s"
+        % (len(used), rounds, last_desc)
     )
+
+
+def probe_profiles(url: str | None = None, timeout: int = 20) -> list[tuple[str, str, str]]:
+    """诊断用：逐个「通道×请求特征」组合真实打一次，报告各自结果。
+
+    返回 [(组合标签, 结果码, 说明)]，结果码为 ok / http-4xx / http-5xx /
+    timeout / error。用途：被 arXiv 拒绝时，一眼看出是「直连被拒」
+    还是「代理不通」，以及哪个请求特征仍被接受 —— 便于决定要不要
+    调整特征阶梯，而不是只看一句 406。
+    """
+    target = url or (API_URL + "?search_query=cat:cs.CV&max_results=1")
+    rows: list[tuple[str, str, str]] = []
+    for name, build in (("direct", None), *_PROXY_BUILDERS):
+        probe_url = target if build is None else build(target)
+        for pname, headers in _REQUEST_PROFILES:
+            label = f"{name}/{pname}"
+            try:
+                _probe(probe_url, headers, timeout)
+                rows.append((label, "ok", "拿到 Atom XML"))
+            except urllib.error.HTTPError as exc:
+                code = "http-4xx" if exc.code < 500 else "http-5xx"
+                rows.append((label, code, f"HTTP {exc.code} {exc.reason}"))
+            except (socket.timeout, TimeoutError):
+                rows.append((label, "timeout", f"{timeout}s 内无响应"))
+            except Exception as exc:  # noqa: BLE001
+                rows.append((label, "error", _describe(exc)))
+    return rows
 
 
 def _parse_published(value: str) -> datetime | None:
@@ -229,12 +320,16 @@ def fetch_recent(
     lookback_days: int = 30,
     timeout: int = 45,
     attempts: int = 6,
+    rounds: int = 2,
 ) -> list[dict]:
     """按检索式拉取近期论文，返回按提交时间倒序的候选列表。
 
     :param query: arXiv 检索式
     :param max_results: 拉取条数上限（候选池，之后再由 LLM 精挑）
     :param lookback_days: 只保留最近 N 天内提交或更新的论文
+    :param attempts: 历史参数，保留仅为兼容旧调用（现由 rounds 控制组合轮数）
+    :param rounds: 组合矩阵轮数（≥1）。工作流层还有「隔 20 分钟整轮重跑」，
+                   所以这里只做有限轮次，避免单次尝试耗时过长。
     """
     params = urllib.parse.urlencode(
         {
@@ -244,7 +339,7 @@ def fetch_recent(
             "max_results": max_results,
         }
     )
-    raw = _request(f"{API_URL}?{params}", timeout=timeout, attempts=attempts)
+    raw = _request(f"{API_URL}?{params}", timeout=timeout, rounds=rounds)
 
     try:
         root = ET.fromstring(raw)

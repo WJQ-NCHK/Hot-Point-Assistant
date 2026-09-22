@@ -11,11 +11,19 @@
 # 幂等保障：脚本内部按 ISO 周键拦截（见 tracker/state.py），
 #   workflow 重试/手动重复触发也不会重复发信。
 #
-# 容错设计（2026-09-14 实测教训）：
-#   1. arXiv 会发生小时级大面积限流（HTTP 429 "Rate exceeded."，
-#      连家宽 IP 都被拒，与本仓库无关）→ 抓取层带直连+公共代理双通道
+# 容错设计（2026-09-14 / 2026-09-21 实测教训）：
+#   1. arXiv 不只按 IP 限流，还会按「请求特征」拒绝：
+#        * HTTP 429 "Rate exceeded."（限流，分钟-小时级自愈）
+#        * HTTP 406 "Not Acceptable"（直接拒绝该 UA/Accept 特征）
+#      抓取层已改为「直连/公共代理 × 多种请求特征」组合矩阵自动切换
 #      （tracker/arxiv_client.py），本层再做 3 次间隔 20 分钟的分批重试；
 #   2. 失败的 run 不写状态 → 同周稍后再次触发会自动补发（幂等保护）。
+#
+# 排障可读性（2026-09-21 教训：三次尝试只看到一句 "exit code 1"，
+# 完全不知道是配置缺失还是抓取被拒）：
+#   - 退出码 1（必要配置缺失）直接失败，不再白等 40 分钟重试；
+#   - 每种退出码都映射成明确原因，写进 ::error:: 注解与 Job Summary；
+#   - 关键 Secret/SMTP 配置只打印「已设置(长度) / 未设置」，绝不打值。
 
 name: weekly-papers
 
@@ -31,6 +39,10 @@ on:
         default: false
       dry_run:
         description: "只生成报告不发送（预览模式）"
+        type: boolean
+        default: false
+      arxiv_probe:
+        description: "只诊断 arXiv 连通性（逐组合打印状态），不发信"
         type: boolean
         default: false
 
@@ -60,6 +72,7 @@ jobs:
       # 零第三方依赖，无需 pip install —— 见 requirements.txt 说明
 
       - name: 运行周报流水线（含分批重试）
+        id: pipeline
         env:
           # ---- 敏感信息全部来自仓库 Secrets，不进代码不进日志 ----
           SMTP_USER: ${{ secrets.SMTP_USER }}
@@ -72,26 +85,119 @@ jobs:
           MAX_RESULTS: "60"
           MIN_PICKS: "5"
           MAX_PICKS: "10"
+          PROBE_ARXIV: ${{ github.event_name == 'workflow_dispatch' && inputs.arxiv_probe && '1' || '0' }}
           FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force && '1' || '0' }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
-        # 分批重试：arXiv 限流/过载通常分钟-小时级自愈，隔 20 分钟再试
+        # 分批重试：arXiv 限流/拒绝通常分钟-小时级自愈，隔 20 分钟再试
         # 比在同一时刻加码重试有效得多。失败不写状态，同周重跑即补发。
+        #
+        # 退出码语义（与 run.py --help 中同一张表）：
+        #   0 成功/幂等跳过   1 配置缺失（重试无意义，直接失败）
+        #   2 arXiv 抓取失败  3 LLM 失败   4 邮件发送失败
         run: |
           set -o pipefail
+          if [ "$PROBE_ARXIV" = "1" ]; then
+            echo "::notice::只做 arXiv 连通性诊断，不发送邮件"
+            python run.py --probe-arxiv -v 2>&1 | tee run.log
+            status=${PIPESTATUS[0]}
+            echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+            exit "$status"
+          fi
+
+          # 配置缺失属于确定性错误：一次都不用试，避免白等 40 分钟
+          if [ -z "$SMTP_USER" ] || [ -z "$SMTP_AUTH_CODE" ] || [ -z "$MAIL_TO" ] || [ -z "$LLM_API_KEY" ]; then
+            {
+              echo "::error::必要 Secret 缺失或为空（SMTP_USER / SMTP_AUTH_CODE / MAIL_TO / LLM_API_KEY）"
+              echo "本仓库 Settings → Secrets and variables → Actions 需存在这 4 个 Repository secrets，且值不能为空。"
+            } | tee run.log
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          # 注意：管道里 $? 是 tee 的退出码，必须用 PIPESTATUS[0] 取 python 的
           status=1
+          code=0
           for i in 1 2 3; do
             echo "=== 第 $i/3 次尝试 ==="
-            if python run.py -v 2>&1 | tee run.log; then
+            python run.py -v 2>&1 | tee run.log
+            code=${PIPESTATUS[0]}
+            if [ "$code" = "0" ]; then
               status=0
               break
             fi
-            echo "::warning::第 $i/3 次尝试失败"
+            if [ "$code" = "1" ]; then
+              echo "::error::配置缺失（退出码 1），重试无意义，直接失败"
+              break
+            fi
+            echo "::warning::第 $i/3 次尝试失败（退出码 $code）"
             if [ "$i" -lt 3 ]; then
               echo "等待 20 分钟后重试（arXiv 限流通常分钟-小时级自愈）"
               sleep 1200
             fi
           done
-          exit $status
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      # 失败/成功都把「哪一步、什么原因」写进 Job Summary —— 不用下载 artifact
+      # 就能看到结论；这里只打印配置项的存在性与长度，绝不打印 Secret 的值。
+      - name: 退出码与排障摘要
+        if: always()
+        run: |
+          python - <<'PY'
+          import os
+
+          REASONS = {
+              "0": ("success", "成功：已发送 / 幂等跳过 / 预览完成"),
+              "1": ("error", "必要配置缺失（Secret 未设置或为空）——重试无意义"),
+              "2": ("error", "arXiv 抓取失败（限流 429 / 拒绝 406 / 网络不通）"),
+              "3": ("error", "LLM 调用失败（鉴权 / 额度 / 网络）"),
+              "4": ("error", "邮件发送失败（SMTP 认证或连接问题）——报告已落盘，下次调度自动补发"),
+          }
+          code = os.environ.get("RUN_EXIT", "")
+          level, reason = REASONS.get(code, ("error", "未识别的失败（看 run.log 的 traceback）"))
+
+          def state(key: str) -> str:
+              value = os.environ.get(key)
+              if value is None:
+                  return "**从未注入**（Secret 不存在）"
+              return f"已注入（{len(value)} 字符）" if value else "**已注入但为空**"
+
+          rows = [
+              ("SMTP_USER", ["SMTP_USER"]),
+              ("SMTP_AUTH_CODE", ["SMTP_AUTH_CODE"]),
+              ("MAIL_TO", ["MAIL_TO"]),
+              ("LLM_API_KEY", ["LLM_API_KEY", "DEEPSEEK_API_KEY"]),
+              ("SMTP_HOST", ["SMTP_HOST"]),
+              ("SMTP_PORT", ["SMTP_PORT"]),
+          ]
+          lines = [
+              "## weekly-papers 排障摘要",
+              "",
+              f"- 退出码：`{code or '未知'}` —— {reason}",
+              "- 关键环境变量（只看存在性与长度，不显示值）：",
+          ]
+          for label, keys in rows:
+              detail = " / ".join(f"`{k}` = {state(k)}" for k in keys)
+              lines.append(f"  - {label}：{detail}")
+          lines += [
+              "",
+              "> 退出码 1 = 去 Settings → Secrets and variables → Actions 补齐 Secret；",
+              "> 退出码 2 = arXiv 限流/拒绝，稍后重跑或手动触发 `arxiv_probe` 诊断；",
+              "> 退出码 3/4 = 看 run.log（artifact）里的错误行。",
+          ]
+          summary = "\n".join(lines)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+              fh.write(summary + "\n")
+          print(summary)
+          if level == "error" and code not in ("0", ""):
+              print(f"::error::{reason}")
+          PY
+        env:
+          RUN_EXIT: ${{ steps.pipeline.outputs.exit_code }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_AUTH_CODE: ${{ secrets.SMTP_AUTH_CODE }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
 
       # 报告与状态无论如何都上传为 artifact：发送失败时成果不丢，
       # 且能从 Actions 页面直接看到本周生成的 HTML 报告
@@ -126,4 +232,4 @@ jobs:
       - name: 失败摘要（便于排障）
         if: failure()
         run: |
-          echo "::error::周报流水线执行失败，请下载本 run 的 artifact 查看 run.log 与 reports/"
+          echo "::error::周报流水线执行失败，查看上面的 Job Summary 或下载本 run 的 artifact 里的 run.log"

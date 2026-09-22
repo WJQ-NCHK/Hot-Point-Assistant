@@ -234,26 +234,28 @@ def _finish_and_send(
 def main(cfg: Config) -> int:
     """CLI 入口使用的顶层函数，负责日志与退出码。
 
-    退出码约定（供 CI/调度判断）：
+    退出码约定（供 CI/调度判断；run.py --help 里有同一张表）：
         0 = sent / skipped / dry_run（成功）
-        2 = 抓取或 LLM 环节失败（重试可能有效）
-        3 = 邮件发送失败（报告已落盘，下次自动补发）
+        1 = 配置缺失（由 run.py 判定，重试无意义）
+        2 = 抓取环节失败（arXiv 限流/拒绝，重试有效）
+        3 = LLM 环节失败（鉴权/额度/网络）
+        4 = 邮件发送失败（报告已落盘，下次自动补发）
     """
     result: RunResult | None = None
     try:
         result = run(cfg)
     except ArxivError as exc:
-        log.error("抓取环节失败：%s", exc)
+        log.error("抓取环节失败（退出码 2，可重试）：%s", exc)
         log.debug(traceback.format_exc())
         return 2
     except LLMError as exc:
-        log.error("LLM 环节失败：%s", exc)
-        log.debug(traceback.format_exc())
-        return 2
-    except MailError as exc:
-        log.error("邮件环节失败：%s", exc)
+        log.error("LLM 环节失败（退出码 3）：%s", exc)
         log.debug(traceback.format_exc())
         return 3
+    except MailError as exc:
+        log.error("邮件环节失败（退出码 4，报告已落盘）：%s", exc)
+        log.debug(traceback.format_exc())
+        return 4
     else:
         log.info("结束：%s —— %s", result.status, result.detail)
         return 0
