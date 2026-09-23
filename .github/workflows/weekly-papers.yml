@@ -1,18 +1,25 @@
-# 每周二傍晚（北京时间）自动抓取前沿论文并发送周报邮件。
+# 每周二北京时间 18:00 自动抓取前沿论文并发送周报邮件。
 #
-# 时区换算：GitHub Actions 的 cron 用 UTC。
-#   18:02 CST (UTC+8) = 10:02 UTC
-#   （刻意避开整点 —— GitHub 整点任务量最大、排队最久，2026-09-14
-#     实测 06:00 UTC 整点任务被跳过；错峰 2 分钟可靠性更高。）
+# ⏰ 发送时刻如何保证（2026-09-23 重构）：
+#   GitHub 的 schedule 实测不守时 —— 2026-09-14 / 09-21 / 09-22 三次定时触发，
+#   实际时间都比 cron 写的晚约 6.5 小时（6h42m / 6h15m），而不是分钟级排队。
+#   因此不再指望 cron 的精度，改成两步：
+#     1) cron 周二 00:18 与 04:02 UTC（北京 08:18 / 12:02）两次「提前唤醒」；
+#     2) 「卡点到目标时刻」步骤把发送时刻夹到「当天周二 18:00 北京」。
+#   按实测 6.5 小时延迟推算，实际醒来时间约为北京 14:30~15:00 / 18:00~19:00，
+#   前者等 3 小时准点发、后者立即发（可能晚几分钟）。
+#   若某天完全不延迟（08:18 醒），距目标 9.7 小时 > 6 小时等待上限，该轮会
+#   跳过并在 Summary 里告警，同时第二个 cron 点（12:02）兜底；真要调整，
+#   把 cron 挪到 09:00 UTC 附近即可，改完当天见效。
 #
-# ⚠ 变更记录：2026-09-22 从「周一 15:05 CST」改为「周二 18:02 CST」。
-#   注意：改 cron 只影响「之后新注册的调度」，本仓库历史上曾出现单次
-#   定时触发偏移数小时（2026-09-14、09-21 两次都是 13:47 UTC 触发，
-#   而文件里当时写的是 07:05 UTC）。排查时以 Actions 页面里该 run 的
-#   事件类型为准：schedule = 定时触发，workflow_dispatch = 手动触发。
+# ⚠ 变更记录：
+#   2026-09-22 从「周一 15:05 CST」改为「周二 18:02 CST」；
+#   2026-09-23 改为「周二两次提前唤醒 + 卡点到 18:00 发送」。
+#   排查定时问题时，以 Actions 页面里该 run 的事件类型为准：
+#   schedule = 定时触发，workflow_dispatch = 手动触发。
 #
 # 免费额度：公共仓库 Actions 完全免费；私有仓库每月 2000 分钟免费额度，
-#   本任务单次运行约 3-5 分钟，每月约 4 次 ≈ 20 分钟，几乎不消耗额度。
+#   本任务每次约 3-5 分钟正式运行（等待时间也算），占用很小。
 #
 # 幂等保障：脚本内部按 ISO 周键拦截（见 tracker/state.py），
 #   workflow 重试/手动重复触发也不会重复发信。
@@ -35,8 +42,22 @@ name: weekly-papers
 
 on:
   schedule:
-    # 每周二 10:02 UTC = 北京时间 18:02。避开整点（见文件头注释）。
-    - cron: "2 10 * * 2"
+    # 【重要】GitHub 的 schedule 不守时：本仓库 2026-09-14 / 09-21 / 09-22
+    # 三次实测，实际触发时间比 cron 晚 6 小时以上，且延迟量不固定
+    # （6h42m / 6h15m）。所以流程拆成两步：
+    #   1) cron 只负责「在窗口内把 runner 叫醒」；
+    #   2) 「卡点到目标时刻」步骤把发送时刻夹到「下一个周二 18:00（北京）」。
+    #
+    # 唤醒时间（周二两个点，北京时间 08:18 与 12:02）：
+    #   * 实测 6~7 小时延迟 → 分别在实际 14:30~15:30 / 18:00~19:00 醒来，
+    #     闸门把发送夹到 18:00（后者可能略晚几分钟，属正常）；
+    #   * 延迟极大（>8h）时可能整轮跳过，同一 cron 的另一时间点兜底；
+    #   * 若某天完全不延迟（08:18 醒）→ 距目标 9.7h 超过 6 小时等待上限，
+    #     该轮跳过并告警；这时把 cron 往后挪到 ~09:00 UTC 即可，当天见效。
+    # 判断依据：每次 run 的 Job Summary 会打印「本轮触发(北京)」与
+    # 「实际发送时刻」，看一两次运行就能反推出当前延迟量。
+    - cron: "18 0 * * 2"
+    - cron: "2 4 * * 2"
   workflow_dispatch:        # 手动触发，用于部署后的验证
     inputs:
       force:
@@ -63,8 +84,10 @@ permissions:
 jobs:
   send:
     runs-on: ubuntu-latest
-    # 3 次尝试 + 2 次间隔 20 分钟 ≈ 最坏 70 分钟
-    timeout-minutes: 75
+    # 定时轮最长要等 6 小时（见「卡点到目标时刻再发」步骤），
+    # 加上流水线本身最坏约 70 分钟（3 次尝试 + 2 次 20 分钟间隔），
+    # 取 350 分钟；同时避开 GitHub 对单个 job 的 6 小时上限。
+    timeout-minutes: 350
 
     steps:
       - name: 检出代码
@@ -77,8 +100,74 @@ jobs:
 
       # 零第三方依赖，无需 pip install —— 见 requirements.txt 说明
 
+      # GitHub 的 schedule 会晚 6 小时以上（见 on.schedule 注释），
+      # 所以这里「提前唤醒、到点才发」：把发送时刻夹到下一个周二 18:00。
+      # 目标时刻用 Python 算（比 bash 的 date -d "last monday" 可靠），
+      # 并且以「目标日期」而不是「触发日期」作为幂等周键，避免延迟跨天后
+      # 与其它轮的周键不一致。
+      #   * 距目标 ≤ 等待上限 → 睡到目标时刻再发（准点送达）；
+      #   * 距目标 > 上限（过早/过晚）→ 整轮跳过，等下一天那轮 cron 补。
+      # 只对定时触发生效；手动触发一定跳过等待，保持可控。
+      - name: 计算目标时刻（下一个周二 18:00 北京）
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          from datetime import datetime, timedelta, timezone
+
+          cst = timezone(timedelta(hours=8))
+          now_utc = datetime.now(timezone.utc)
+          now_cn = now_utc.astimezone(cst)
+          # 下一个「周二」（isoweekday: 周一=1 … 周二=2 … 周日=7），今天就是周二则为 0
+          days = (2 - now_cn.isoweekday()) % 7
+          cand = (now_cn + timedelta(days=days)).replace(
+              hour=18, minute=0, second=0, microsecond=0)
+          if cand <= now_cn:
+              cand += timedelta(days=7)
+          target = int(cand.astimezone(timezone.utc).timestamp())
+          print(f"SEND_TARGET_EPOCH={target}")
+          print(f"SEND_TARGET_CN={cand:%Y-%m-%d %H:%M}")
+          PY
+
+      - name: 卡点到目标时刻再发（仅定时触发）
+        env:
+          MAX_WAIT_SECONDS: "21600"   # 最多等 6 小时，超过则跳过整轮
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" != "schedule" ]; then
+            echo "触发方式=${GITHUB_EVENT_NAME}（手动/API），跳过等待，立即执行。"
+            echo "SEND_MOMENT=$(TZ=Asia/Shanghai date +'%F %H:%M')" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          now=$(date -u +%s)
+          target="${SEND_TARGET_EPOCH:?目标时刻未计算}"
+          today1800=$(date -u -d "$(TZ=Asia/Shanghai date +%F) 18:00 Asia/Shanghai" +%s)
+          grace=43200   # 目标已过但在同一天内：仍然发送（晚到总比不发好）
+          delta=$((target - now))
+          echo "触发方式        ：${GITHUB_EVENT_NAME}"
+          echo "本轮触发(北京)  ：$(TZ=Asia/Shanghai date +'%F %H:%M')"
+          echo "发送目标(北京)  ：${SEND_TARGET_CN}"
+          if [ "$delta" -lt "-$grace" ]; then
+            echo "::warning::距目标（${SEND_TARGET_CN}）过远，本轮跳过，等下一轮 cron 在窗口内执行（GitHub 调度延迟所致，不是故障）"
+            echo "SEND_SKIPPED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$delta" -gt "$MAX_WAIT_SECONDS" ]; then
+            echo "::warning::距目标还有 $((delta / 3600)) 小时，超过等待上限 $((MAX_WAIT_SECONDS / 3600)) 小时；本轮跳过，等下一轮 cron"
+            echo "SEND_SKIPPED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$delta" -gt 0 ]; then
+            echo "::notice::等待 $((delta / 60)) 分，直到北京时间 ${SEND_TARGET_CN} 再执行"
+            sleep "$delta"
+          elif [ "$now" -ge "$today1800" ]; then
+            echo "::warning::GitHub 定时触发晚于目标 $(( -delta / 60 )) 分钟，立即发送（调度延迟，非代码问题）"
+          else
+            echo "::notice::已在目标时刻附近，立即执行"
+          fi
+          echo "SEND_MOMENT=$(TZ=Asia/Shanghai date +'%F %H:%M')" >> "$GITHUB_ENV"
+          echo "现在(北京) $(TZ=Asia/Shanghai date +'%F %H:%M')，开始执行流水线"
+
       - name: 运行周报流水线（含分批重试）
         id: pipeline
+        if: env.SEND_SKIPPED != '1'
         env:
           # ---- 敏感信息全部来自仓库 Secrets，不进代码不进日志 ----
           SMTP_USER: ${{ secrets.SMTP_USER }}
