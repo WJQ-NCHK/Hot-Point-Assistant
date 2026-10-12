@@ -1,6 +1,6 @@
 {
   "_comment": "已推送论文的 arXiv ID 清单。每周任务先读此文件，只推送不在列表中的新论文；发送成功后追加。",
-  "_updated": "2026-10-05",
+  "_updated": "2026-10-12",
   "seen": [
     {
       "arxiv_id": "2605.15195",
@@ -171,11 +171,52 @@
       "arxiv_id": "2609.33253",
       "title": "VGGT-Diff: Visual Geometry Meets Diffusion for Sparse-View Novel View Synthesis",
       "pushed_at": "2026-10-05"
+    },
+    {
+      "arxiv_id": "2610.12461",
+      "title": "OuroWorld: Bringing Any 3D World Alive as Diverse, Endlessly Looping 3D Cinemagraphs",
+      "pushed_at": "2026-10-12"
+    },
+    {
+      "arxiv_id": "2610.12282",
+      "title": "Slot3R: Set-Associative Spatial Memory for Streaming 3D Reconstruction",
+      "pushed_at": "2026-10-12"
+    },
+    {
+      "arxiv_id": "2610.11857",
+      "title": "Pose-Free Feed-Forward 3D Inpainting via Learnable Mask Attention and Support Token Refinement",
+      "pushed_at": "2026-10-12"
+    },
+    {
+      "arxiv_id": "2610.10960",
+      "title": "LVSPM: Long Sequence View Synthesis and Pose Estimation Model",
+      "pushed_at": "2026-10-12"
+    },
+    {
+      "arxiv_id": "2610.08978",
+      "title": "S2Tok: Streaming 3D Gaussian Reconstruction with Persistent Spatial Tokens",
+      "pushed_at": "2026-10-12"
+    },
+    {
+      "arxiv_id": "2610.04722",
+      "title": "NAMVIS: Next-Scale Autoregressive Multi-View Image Synthesis",
+      "pushed_at": "2026-10-12"
+    },
+    {
+      "arxiv_id": "2610.04351",
+      "title": "LoCoSplat: Real-Time Feed-Forward 3D Gaussian Splatting with Minimal 3D Reasoning",
+      "pushed_at": "2026-10-12"
+    },
+    {
+      "arxiv_id": "2610.13177",
+      "title": "CompactSplat: Spatially Adaptive Gaussian Distribution for Feedforward Scene Reconstruction",
+      "pushed_at": "2026-10-12"
     }
   ],
   "_runs": [
     "2026-W37",
     "2026-W39",
-    "2026-W41"
+    "2026-W41",
+    "2026-W42"
   ]
 }
