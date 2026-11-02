@@ -1,6 +1,6 @@
 {
   "_comment": "已推送论文的 arXiv ID 清单。每周任务先读此文件，只推送不在列表中的新论文；发送成功后追加。",
-  "_updated": "2026-10-26",
+  "_updated": "2026-11-02",
   "seen": [
     {
       "arxiv_id": "2605.15195",
@@ -276,6 +276,46 @@
       "arxiv_id": "2610.24812",
       "title": "SwitchSplat: Learning Discrete Object States from Casually Captured Scenes",
       "pushed_at": "2026-10-26"
+    },
+    {
+      "arxiv_id": "2610.40495",
+      "title": "LucidLyra: Feed-Forward Generative 3D Scene Reconstruction and Joint Understanding via Multi-Task Distillation",
+      "pushed_at": "2026-11-02"
+    },
+    {
+      "arxiv_id": "2610.40614",
+      "title": "L3G-World: Real-Time Infinite World Generation with Latent 3D Gaussian Memory",
+      "pushed_at": "2026-11-02"
+    },
+    {
+      "arxiv_id": "2610.35854",
+      "title": "FL4N: Feed-forward Latent Model for 4D Novel View Synthesis",
+      "pushed_at": "2026-11-02"
+    },
+    {
+      "arxiv_id": "2610.35522",
+      "title": "Generative Structure from Motion with Native 3D Diffusion",
+      "pushed_at": "2026-11-02"
+    },
+    {
+      "arxiv_id": "2610.36150",
+      "title": "Any3R: Feedforward 3D Reconstruction from Any Camera Type",
+      "pushed_at": "2026-11-02"
+    },
+    {
+      "arxiv_id": "2610.34845",
+      "title": "PosePlaner: Denoising Any Feed-Forward Pose Predictor from Pairwise Planar Geometry",
+      "pushed_at": "2026-11-02"
+    },
+    {
+      "arxiv_id": "2610.37545",
+      "title": "GroundControl: Satellite-Conditioned Multi-View Diffusion for Reconstruction-Free Novel View Synthesis",
+      "pushed_at": "2026-11-02"
+    },
+    {
+      "arxiv_id": "2610.37818",
+      "title": "GOFish: Full Field-of-View Gaussian Splatting and Mesh Extraction",
+      "pushed_at": "2026-11-02"
     }
   ],
   "_runs": [
@@ -284,6 +324,7 @@
     "2026-W41",
     "2026-W42",
     "2026-W43",
-    "2026-W44"
+    "2026-W44",
+    "2026-W45"
   ]
 }
