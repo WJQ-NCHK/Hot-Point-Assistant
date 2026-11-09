@@ -1,6 +1,6 @@
 {
   "_comment": "已推送论文的 arXiv ID 清单。每周任务先读此文件，只推送不在列表中的新论文；发送成功后追加。",
-  "_updated": "2026-11-02",
+  "_updated": "2026-11-09",
   "seen": [
     {
       "arxiv_id": "2605.15195",
@@ -316,6 +316,41 @@
       "arxiv_id": "2610.37818",
       "title": "GOFish: Full Field-of-View Gaussian Splatting and Mesh Extraction",
       "pushed_at": "2026-11-02"
+    },
+    {
+      "arxiv_id": "2611.08436",
+      "title": "SM4RT: Cascaded Feed-forward Model for 4D Reconstruction",
+      "pushed_at": "2026-11-09"
+    },
+    {
+      "arxiv_id": "2611.07575",
+      "title": "Georeferenced Cross-View 3D Reconstruction from Ground and Satellite Images",
+      "pushed_at": "2026-11-09"
+    },
+    {
+      "arxiv_id": "2611.07709",
+      "title": "AffineGS: Unlocking Accurate Geometry in 3DGS via Spatially Varying Affine Rectification",
+      "pushed_at": "2026-11-09"
+    },
+    {
+      "arxiv_id": "2611.02857",
+      "title": "Solv3R: 3D Looped Transformer as a Multi-view Solver",
+      "pushed_at": "2026-11-09"
+    },
+    {
+      "arxiv_id": "2611.06974",
+      "title": "T$^2$-Splat: Adaptive Topology Mesh Splatting with Texture Residuals",
+      "pushed_at": "2026-11-09"
+    },
+    {
+      "arxiv_id": "2611.03228",
+      "title": "AnchorComplete: Recovering Complete Scene Meshes from Partial Point Clouds",
+      "pushed_at": "2026-11-09"
+    },
+    {
+      "arxiv_id": "2611.08288",
+      "title": "Hierarchical Incremental Beta Splatting for Online Reconstruction",
+      "pushed_at": "2026-11-09"
     }
   ],
   "_runs": [
@@ -325,6 +360,7 @@
     "2026-W42",
     "2026-W43",
     "2026-W44",
-    "2026-W45"
+    "2026-W45",
+    "2026-W46"
   ]
 }
