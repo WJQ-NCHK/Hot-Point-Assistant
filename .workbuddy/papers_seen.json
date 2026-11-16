@@ -1,6 +1,6 @@
 {
   "_comment": "已推送论文的 arXiv ID 清单。每周任务先读此文件，只推送不在列表中的新论文；发送成功后追加。",
-  "_updated": "2026-11-09",
+  "_updated": "2026-11-16",
   "seen": [
     {
       "arxiv_id": "2605.15195",
@@ -351,6 +351,46 @@
       "arxiv_id": "2611.08288",
       "title": "Hierarchical Incremental Beta Splatting for Online Reconstruction",
       "pushed_at": "2026-11-09"
+    },
+    {
+      "arxiv_id": "2611.13453",
+      "title": "Camera3R: Feed-Forward 3D Reconstruction from Heterogeneous Camera Models",
+      "pushed_at": "2026-11-16"
+    },
+    {
+      "arxiv_id": "2611.11964",
+      "title": "3R-Adapter: Retrieval, Rewiring, and Refinement for Efficient Adaptation of 3D Reconstruction Model",
+      "pushed_at": "2026-11-16"
+    },
+    {
+      "arxiv_id": "2611.12011",
+      "title": "HIST3R: Decomposing and Rectifying State Updates with History for Streaming 3D Reconstruction",
+      "pushed_at": "2026-11-16"
+    },
+    {
+      "arxiv_id": "2611.12875",
+      "title": "Click3R: Interactive Stereo 3D Reconstruction with Sparse Correspondence Clicks",
+      "pushed_at": "2026-11-16"
+    },
+    {
+      "arxiv_id": "2611.15153",
+      "title": "MatrixSplat: Matrix-Parallel and Feature-Scalable 3D Gaussian Splatting Rendering on GPUs",
+      "pushed_at": "2026-11-16"
+    },
+    {
+      "arxiv_id": "2611.11602",
+      "title": "Martine: Benchmarking Multi-View 3D Surface Reconstruction Across Viewpoint Coverage, Resolution, and Lighting",
+      "pushed_at": "2026-11-16"
+    },
+    {
+      "arxiv_id": "2611.05593",
+      "title": "GaussianRenderFormer: Transformer-based Rendering of 3D Gaussian Splats",
+      "pushed_at": "2026-11-16"
+    },
+    {
+      "arxiv_id": "2611.12716",
+      "title": "Spaghetti Splatting: Differentiating Curvilinear Dirac Masses via Convolution",
+      "pushed_at": "2026-11-16"
     }
   ],
   "_runs": [
@@ -361,6 +401,7 @@
     "2026-W43",
     "2026-W44",
     "2026-W45",
-    "2026-W46"
+    "2026-W46",
+    "2026-W47"
   ]
 }
